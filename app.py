@@ -1,74 +1,27 @@
 from flask import Flask, Response
-from ics import Calendar, Event
-from datetime import datetime, timedelta
-import requests
-from bs4 import BeautifulSoup
-
-# === CONFIGURATION ===
-JOUEURS = ["Djokovic", "Alcaraz", "Sinner", "Arthur Fils", "Lois Boisson"]
-GRANDSCHELEMS = [
-    "roland-garros",
-    "wimbledon",
-    "us-open",
-    "australian-open"
-]
-BASE_URL = "https://www.flashscore.fr/tennis/"
+from ics import Calendar, Event, DisplayAlarm
+from datetime import timedelta
+from match_fetcher import get_today_matches
 
 app = Flask(__name__)
 
-def get_matches():
-    matchs = []
-    for tournoi in GRANDSCHELEMS:
-        url = BASE_URL + tournoi + "/"
-        try:
-            html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}).text
-            soup = BeautifulSoup(html, "html.parser")
-
-            for div in soup.find_all("div", class_="event__match"):
-                match_time = div.get("data-start")
-                player1 = div.get("data-home-team", "")
-                player2 = div.get("data-away-team", "")
-
-                if not match_time or not player1 or not player2:
-                    continue
-
-                # Vérifie si un joueur suivi est dans ce match
-                if any(joueur.lower() in (player1 + player2).lower() for joueur in JOUEURS):
-                    dt = datetime.utcfromtimestamp(int(match_time)) + timedelta(hours=2)  # Converti en heure de Paris
-                    matchs.append({
-                        "title": f"{player1} vs {player2}",
-                        "start": dt,
-                        "tournament": tournoi.replace("-", " ").title()
-                    })
-
-        except Exception as e:
-            print(f"Erreur lors du chargement de {tournoi}: {e}")
-    return matchs
-
 @app.route("/calendar.ics")
 def calendar():
-    cal = Calendar()
-    for match in get_matches():
+    c = Calendar()
+
+    for match in get_today_matches():
         e = Event()
-        e.name = match["title"]
+        e.name = f"{match['player1']} vs {match['player2']}"
         e.begin = match["start"]
-        e.end = match["start"] + timedelta(hours=2)
-        e.description = f"Tournoi : {match['tournament']}"
+        e.duration = timedelta(hours=2)
+        alarm = DisplayAlarm(trigger=timedelta(hours=-1))
+        e.alarms.append(alarm)
+        c.events.add(e)
 
-        # Ajout d'une alarme 1h avant le match
-        e.extra.append("BEGIN:VALARM")
-        e.extra.append("TRIGGER:-PT60M")
-        e.extra.append("ACTION:DISPLAY")
-        e.extra.append("DESCRIPTION:Match dans 1h")
-        e.extra.append("END:VALARM")
+    return Response(str(c), mimetype="text/calendar")
 
-        cal.events.add(e)
-
-    return Response(str(cal), mimetype="text/calendar")
-
+# Pour Render
 import os
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Render définit la variable d’environnement PORT
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
